@@ -1,0 +1,84 @@
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const { validationResult } = require('express-validator');
+const { findOne, insert } = require('../db/memoryStore');
+
+const generateToken = (id) =>
+  jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+const safeUser = (u) => {
+  const { password, ...rest } = u;
+  return rest;
+};
+
+// POST /api/auth/register
+const register = async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, message: errors.array()[0].msg });
+  }
+  try {
+    const { name, email, password } = req.body;
+
+    if (findOne('users', u => u.email === email.toLowerCase().trim())) {
+      return res.status(409).json({ success: false, message: 'Email is already registered.' });
+    }
+
+    const hashed = await bcrypt.hash(password, 12);
+    const user = insert('users', {
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      password: hashed,
+      phone: '', gender: '', bloodGroup: '',
+      allergies: [], chronicConditions: [],
+      emergencyContact: { name: '', phone: '', relation: '' },
+      role: 'patient', isActive: true
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Account created successfully.',
+      token: generateToken(user._id),
+      user: safeUser(user)
+    });
+  } catch (err) {
+    console.error('Register error:', err);
+    res.status(500).json({ success: false, message: 'Server error. Please try again.' });
+  }
+};
+
+// POST /api/auth/login
+const login = async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, message: errors.array()[0].msg });
+  }
+  try {
+    const { email, password } = req.body;
+    const user = findOne('users', u => u.email === email.toLowerCase().trim());
+
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({ success: false, message: 'Invalid email or password.' });
+    }
+    if (!user.isActive) {
+      return res.status(403).json({ success: false, message: 'Account is deactivated.' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Login successful.',
+      token: generateToken(user._id),
+      user: safeUser(user)
+    });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ success: false, message: 'Server error. Please try again.' });
+  }
+};
+
+// GET /api/auth/me
+const getMe = (req, res) => {
+  res.json({ success: true, user: safeUser(req.user) });
+};
+
+module.exports = { register, login, getMe };
